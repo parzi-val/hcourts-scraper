@@ -343,21 +343,25 @@ class CaseHistoryParser:
         if not fir_section:
             return fir_info
             
-        # Parse each line separately to avoid concatenation issues
-        lines = fir_section.get_text().split('\n')
-        for line in lines:
-            line = line.strip()
-            if ':' in line:
-                # Split on first colon
-                parts = line.split(':', 1)
-                if len(parts) == 2:
-                    key = parts[0].strip()
-                    value = parts[1].strip()
-                    # Clean up extra whitespace and remove any trailing text
+        # Find all span elements that contain labels (those with width:150px style)
+        label_spans = fir_section.find_all('span', style=lambda x: x and 'width:150px' in x)
+        
+        for label_span in label_spans:
+            label = label_span.get_text(strip=True)
+            if not label:
+                continue
+                
+            # Find the next label element that contains the value
+            next_label = label_span.find_next('label')
+            if next_label:
+                # Extract the value from the label text
+                label_text = next_label.get_text(strip=True)
+                if label_text.startswith(':'):
+                    # Remove the colon and clean up
+                    value = label_text[1:].strip()
+                    # Remove any trailing whitespace
                     value = re.sub(r'\s+', ' ', value).strip()
-                    # Remove any trailing text that might be part of the next field
-                    value = re.sub(r'\s+[A-Za-z\s]+$', '', value).strip()
-                    fir_info[key] = value
+                    fir_info[label] = value
         
         return fir_info
     
