@@ -137,39 +137,7 @@
                             placeholder="Enter year (e.g., 2024)" value="2024">
                     </div>
 
-                    <!-- CAPTCHA -->
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">
-                            CAPTCHA
-                        </label>
-                        <div class="flex items-center space-x-4">
-                            <div class="flex-1">
-                                <img id="captchaImage" src="" alt="CAPTCHA"
-                                    class="h-12 border border-gray-300 rounded-md" style="display: none;">
-                                <div id="loadingCaptcha"
-                                    class="h-12 bg-gray-100 rounded-md flex items-center justify-center">
-                                    <div class="inline-flex items-center text-sm text-gray-600">
-                                        <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-primary"
-                                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
-                                                stroke-width="4"></circle>
-                                            <path class="opacity-75" fill="currentColor"
-                                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
-                                            </path>
-                                        </svg>
-                                        Loading CAPTCHA...
-                                    </div>
-                                </div>
-                            </div>
-                            <button type="button" id="refreshCaptcha"
-                                class="px-3 py-2 text-sm text-primary hover:text-blue-700">
-                                🔄 Refresh
-                            </button>
-                        </div>
-                        <input type="text" id="captchaValue" name="captchaValue" required
-                            class="mt-2 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary"
-                            placeholder="Enter CAPTCHA text">
-                    </div>
+                    
 
                     <!-- Submit Button -->
                     <div class="pt-4">
@@ -296,13 +264,11 @@
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function () {
             loadStates();
-            loadCaptcha();
 
             // Event listeners
             document.getElementById('state').addEventListener('change', handleStateChange);
             document.getElementById('bench').addEventListener('change', handleBenchChange);
             document.getElementById('caseSearchForm').addEventListener('submit', handleSearch);
-            document.getElementById('refreshCaptcha').addEventListener('click', loadCaptcha);
         });
 
         // Load states
@@ -425,30 +391,6 @@
             }
         }
 
-        // Load CAPTCHA
-        async function loadCaptcha() {
-            showLoading('loadingCaptcha');
-            document.getElementById('captchaImage').style.display = 'none';
-
-            try {
-                const response = await fetch('/api/captcha');
-                const data = await response.json();
-
-                if (data.success) {
-                    const captchaImage = document.getElementById('captchaImage');
-                    captchaImage.src = data.captcha_image;
-                    captchaImage.style.display = 'block';
-                    document.getElementById('captchaValue').value = '';
-                } else {
-                    showError('Failed to load CAPTCHA');
-                }
-            } catch (error) {
-                showError('Error loading CAPTCHA: ' + error.message);
-            } finally {
-                hideLoading('loadingCaptcha');
-            }
-        }
-
         // Handle search
         async function handleSearch(e) {
             e.preventDefault();
@@ -459,8 +401,7 @@
                 bench: formData.get('bench'),
                 case_type: formData.get('caseType'),
                 case_no: formData.get('caseNo'),
-                year: formData.get('year'),
-                captcha_value: formData.get('captchaValue')
+                year: formData.get('year')
             };
 
             if (!Object.values(searchData).every(value => value)) {
@@ -489,12 +430,9 @@
                     }
                 } else {
                     showError(data.detail || 'Search failed');
-                    // Refresh CAPTCHA on error
-                    loadCaptcha();
                 }
             } catch (error) {
                 showError('Error during search: ' + error.message);
-                loadCaptcha();
             } finally {
                 setSearchButtonLoading(false);
             }
@@ -760,12 +698,10 @@
                 const orderDiv = document.createElement('div');
                 orderDiv.className = 'p-4 bg-gray-50 rounded-lg mb-4';
 
-                // Create proxy URL for PDF
                 let pdfLink = '';
                 if (order.pdf_url) {
-                    const filename = order.pdf_url.split('filename=')[1]?.split('&')[0] || 'order.pdf';
-                    const proxyUrl = `/api/pdf-proxy?filename=${filename}&original_url=${encodeURIComponent(order.pdf_url)}`;
-                    pdfLink = `<a href="${proxyUrl}" target="_blank" class="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-primary hover:bg-blue-700">📄 View PDF</a>`;
+                    // The backend now provides the correct proxy URL directly
+                    pdfLink = `<a href="${order.pdf_url}" target="_blank" class="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-primary hover:bg-blue-700 pdf-view-btn">📄 View PDF</a>`;
                 }
 
                 orderDiv.innerHTML = `
@@ -778,6 +714,7 @@
                         </div>
                         ${pdfLink}
                     </div>
+                    <div class="pdf-spinner hidden mt-2"><svg class="animate-spin h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span class="ml-2 text-sm text-gray-600">Fetching PDF...</span></div>
                 `;
                 section.appendChild(orderDiv);
             });

@@ -1,3 +1,4 @@
 logs/
 __pycache__/
 .env
+static/temp_pdfs/

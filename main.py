@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -10,6 +10,8 @@ import base64
 from io import BytesIO
 import json
 import os
+import uuid
+from urllib.parse import quote
 
 app = FastAPI(title="High Courts Case Scraper")
 
@@ -165,9 +167,8 @@ async def search_case(request: Request):
         case_type = data.get("case_type")
         case_no = data.get("case_no")
         year = data.get("year")
-        captcha_value = data.get("captcha_value")
         
-        if not all([state_name, bench_name, case_type, case_no, year, captcha_value]):
+        if not all([state_name, bench_name, case_type, case_no, year]):
             raise HTTPException(status_code=400, detail="All fields are required")
         
         if not scraper:
@@ -214,6 +215,16 @@ async def search_case(request: Request):
             # Try to use the case_type directly as a code
             case_type_code = case_type
             print(f"Using case_type directly as code: {case_type_code}")
+
+        # --- AUTO-SOLVE CAPTCHA ---
+        captcha_image = scraper.get_captcha_image()
+        if not captcha_image:
+            raise HTTPException(status_code=500, detail="Failed to fetch CAPTCHA image")
+        
+        captcha_value, was_auto_solved = scraper.captcha_solver.solve_captcha_with_fallback(captcha_image)
+        if not captcha_value:
+            raise HTTPException(status_code=500, detail="Failed to solve CAPTCHA")
+        # --- END AUTO-SOLVE ---
         
         print(f"Selected case type code: {case_type_code}")
         print(f"Available case types: {list(scraper.case_type_map.keys())[:5]}...")  # Show first 5 for debugging
@@ -353,26 +364,14 @@ async def get_case_details(request: Request):
         if parsed_data.get('orders'):
             for order in parsed_data['orders']:
                 if order.get('pdf_url'):
-                    # Extract the filename from the original URL
                     original_url = order['pdf_url']
-                    print(f"Processing PDF URL: {original_url}")
                     
-                    if 'filename=' in original_url:
-                        filename = original_url.split('filename=')[1].split('&')[0]
-                        print(f"Extracted filename: {filename}")
-                        
-                        # Ensure original_url is the relative path
-                        if original_url.startswith('http'):
-                            # Extract just the path part
-                            from urllib.parse import urlparse
-                            parsed = urlparse(original_url)
-                            original_url = parsed.path + '?' + parsed.query
-                            print(f"Extracted relative path: {original_url}")
-                        
-                        # Create our proxy URL
-                        proxy_url = f"/api/pdf-proxy?filename={filename}&original_url={original_url}"
-                        print(f"Created proxy URL: {proxy_url}")
-                        order['pdf_url'] = proxy_url
+                    # URL-encode the original URL to ensure it's passed correctly
+                    encoded_url = quote(original_url, safe='')
+                    
+                    # Create our proxy URL with the fully encoded original URL
+                    proxy_url = f"/api/pdf-proxy?url={encoded_url}"
+                    order['pdf_url'] = proxy_url
         
         return {"success": True, "case_data": parsed_data}
         
@@ -381,95 +380,109 @@ async def get_case_details(request: Request):
         raise HTTPException(status_code=500, detail=f"Error fetching case details: {str(e)}")
 
 @app.get("/api/pdf-proxy")
-async def pdf_proxy(filename: str, original_url: str):
-    """Proxy PDF requests to handle session cookies"""
+async def pdf_proxy(url: str):
+    """Proxy PDF requests to handle session cookies, download and serve statically"""
     global scraper
+    from urllib.parse import unquote, urlparse, parse_qs
     
-    print(f"PDF Proxy Debug:")
-    print(f"  - filename: {filename}")
-    print(f"  - original_url: {original_url}")
-    
+    # Get the logger
+    from logging_config import get_logger
+    logger = get_logger()
+
+    logger.info("="*40)
+    logger.info("PDF PROXY REQUEST RECEIVED")
+    logger.info(f"  - Incoming URL parameter: {url}")
+
     try:
         if not scraper:
+            logger.info("Scraper not initialized, creating new instance...")
             scraper = ECourtsHCSCraper("https://hcservices.ecourts.gov.in")
             if not scraper.initialize_session():
+                logger.error("Failed to initialize scraper session")
                 raise HTTPException(status_code=500, detail="Failed to initialize scraper")
-        
-        # URL decode the original_url first
-        from urllib.parse import unquote
-        original_url = unquote(original_url)
-        print(f"  - decoded original_url: {original_url}")
-        
-        # Check if original_url contains our proxy endpoint (which means it's wrong)
-        if '/api/pdf-proxy' in original_url:
-            print(f"  - ERROR: original_url contains /api/pdf-proxy, this is wrong!")
-            # Try to extract the actual PDF URL from the query parameters
-            if 'original_url=' in original_url:
-                # Extract everything after original_url= until the end
-                import re
-                full_match = re.search(r'original_url=(.+)', original_url)
-                if full_match:
-                    actual_url = unquote(full_match.group(1))
-                    print(f"  - extracted full actual_url: {actual_url}")
-                    original_url = actual_url
-                else:
-                    raise HTTPException(status_code=400, detail="Could not extract PDF URL from proxy URL")
-            else:
-                raise HTTPException(status_code=400, detail="Invalid proxy URL format")
-        
-        # Ensure original_url is the correct PDF path
+            logger.info("Scraper initialized successfully.")
+
+        # The URL parameter from FastAPI is already decoded, so we use it directly.
+        # Any '+' signs in the original URL were preserved by `quote` and decoded by FastAPI.
+        original_url = url
+        logger.info(f"  - Using URL parameter as received: {original_url}")
+
+        # Ensure the URL starts with a slash
+        if not original_url.startswith('/'):
+            original_url = '/' + original_url
+            logger.info(f"  - Prepended slash to URL: {original_url}")
+
+        # Validate the URL format
         if not original_url.startswith('/cases/display_pdf.php'):
-            if original_url.startswith('cases/display_pdf.php'):
-                original_url = '/' + original_url
-            else:
-                print(f"  - ERROR: Invalid PDF URL format: {original_url}")
-                raise HTTPException(status_code=400, detail="Invalid PDF URL format")
-        
-        # Construct the full PDF URL
+            logger.error(f"Invalid PDF URL format: {original_url}")
+            raise HTTPException(status_code=400, detail="Invalid PDF URL format")
+
+        # Extract filename from the original URL for saving the file
+        try:
+            parsed_original_url = urlparse(original_url)
+            query_params = parse_qs(parsed_original_url.query)
+            filename = query_params.get('filename', [f"unknown_{uuid.uuid4().hex}"])[0]
+            logger.info(f"  - Extracted filename: {filename}")
+        except Exception as e:
+            logger.error(f"Could not parse filename from URL: {e}")
+            filename = f"error_{uuid.uuid4().hex}"
+
+        # Construct the full URL to fetch from the eCourts server
         full_url = f"https://hcservices.ecourts.gov.in/hcservices{original_url}"
-        print(f"  - full_url: {full_url}")
-        
+        logger.info(f"  - Constructed full URL for fetching: {full_url}")
+
         # Fetch the PDF with session cookies
         response = scraper._fetch_page_content(full_url)
+
+        if not response:
+            logger.error("PDF fetch failed: No response from server.")
+            raise HTTPException(status_code=500, detail="Failed to fetch PDF: No response")
+            
+        logger.info(f"  - Response status code: {response.status_code}")
+        logger.info(f"  - Response headers: {dict(response.headers)}")
+
+        if response.status_code != 200:
+            logger.error(f"PDF fetch failed with status code {response.status_code}")
+            raise HTTPException(status_code=response.status_code, detail="PDF not found on server")
+
+        # Check if the response is actually a PDF or an HTML error page
+        content_type = response.headers.get('content-type', '').lower()
+        is_pdf = 'application/pdf' in content_type or b'%PDF' in response.content[:10]
+
+        if not is_pdf:
+            logger.error("Server returned non-PDF content, likely an error page.")
+            logger.debug(f"  - Content-Type: {content_type}")
+            logger.debug(f"  - Content preview: {response.content[:200]}")
+            raise HTTPException(status_code=404, detail="PDF not available - server returned an error page")
+
+        logger.info("PDF content fetched successfully.")
+
+        # Save PDF to a temporary directory
+        temp_dir = 'static/temp_pdfs'
+        os.makedirs(temp_dir, exist_ok=True)
         
-        if not response or response.status_code != 200:
-            print(f"  - ERROR: PDF fetch failed - status: {response.status_code if response else 'No response'}")
-            raise HTTPException(status_code=404, detail="PDF not found")
+        # Create a unique filename to avoid conflicts
+        unique_id = uuid.uuid4().hex
+        temp_filename = f"{filename.replace('/', '_').replace('..', '')}_{unique_id}.pdf"
+        temp_path = os.path.join(temp_dir, temp_filename)
         
-        # Check if the response is actually a PDF or HTML error page
-        content_type = response.headers.get('content-type', '')
-        print(f"  - Response content-type: {content_type}")
+        with open(temp_path, 'wb') as f:
+            f.write(response.content)
+        logger.info(f"PDF saved to temporary file: {temp_path}")
+
+        # Return the static URL to the newly saved PDF
+        static_url = f"/static/temp_pdfs/{temp_filename}"
+        logger.info(f"Serving PDF from static URL: {static_url}")
         
-        # Check first few bytes to see if it's PDF or HTML
-        first_bytes = response.content[:20]
-        print(f"  - First 20 bytes: {first_bytes}")
-        
-        if b'%PDF' in first_bytes:
-            print(f"  - SUCCESS: Valid PDF content detected")
-        elif b'<!doctype' in first_bytes.lower() or b'<html' in first_bytes.lower():
-            print(f"  - ERROR: Server returned HTML instead of PDF")
-            print(f"  - HTML content preview: {response.content[:200]}")
-            raise HTTPException(status_code=404, detail="PDF not available - server returned HTML error page")
-        else:
-            print(f"  - WARNING: Unknown content type, proceeding anyway")
-            print(f"  - Content preview: {response.content[:200]}")
-        
-        print(f"  - SUCCESS: PDF fetched successfully")
-        
-        # Return the PDF content
-        from fastapi.responses import Response
-        return Response(
-            content=response.content,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"inline; filename={filename}.pdf",
-                "Cache-Control": "public, max-age=3600"
-            }
-        )
-        
+        # Redirect the user directly to the static PDF file
+        return RedirectResponse(url=static_url)
+
+    except HTTPException as he:
+        logger.error(f"HTTP Exception in PDF proxy: {he.detail}")
+        raise he
     except Exception as e:
-        print(f"  - ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching PDF: {str(e)}")
+        logger.error(f"An unexpected error occurred in PDF proxy: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

@@ -89,26 +89,20 @@ def run_test_flow():
     print(f"✅ Successfully fetched {len(case_types)} case types")
     print("Bench and Case Type lists fetched successfully.")
 
-    # --- 6. SOLVE CAPTCHA (MANUAL INTERVENTION) ---
-    print("\nStep 5: Fetching and displaying CAPTCHA for manual solving...")
+    # --- 6. SOLVE CAPTCHA (AUTOMATIC) ---
+    print("\nStep 5: Fetching and solving CAPTCHA automatically...")
     captcha_image_data = scraper.get_captcha_image()
     if not captcha_image_data:
         print("❌ Failed to get CAPTCHA image. Exiting.")
         return
         
-    try:
-        image = Image.open(BytesIO(captcha_image_data))
-        print("📷 CAPTCHA image opened successfully")
-        image.show()
-    except Exception as e:
-        print(f"⚠️  Could not open image automatically. Please save and view manually. Error: {e}")
+    captcha_value, was_auto_solved = scraper.captcha_solver.solve_captcha_with_fallback(captcha_image_data)
     
-    captcha_value = input("Please enter the CAPTCHA code shown in the image: ").strip()
     if not captcha_value:
-        print("❌ No CAPTCHA value entered. Exiting.")
+        print("❌ Failed to solve CAPTCHA. Exiting.")
         return
 
-    print(f"✅ CAPTCHA entered: {captcha_value}")
+    print(f"✅ CAPTCHA solved automatically: {captcha_value}")
 
     # --- 7. PERFORM FINAL SEARCH ---
     print("\nStep 6: Performing the final search...")

@@ -1,0 +1,10 @@
+feat: Integrate Gemini for automatic CAPTCHA solving
+
+This commit integrates the Gemini Vision API to automatically solve CAPTCHAs, removing the need for manual user input.
+
+- Adds `captcha_solver.py` with a `CaptchaSolver` class that uses the `google-generativeai` library.
+- Updates `requirements.txt` with `google-generativeai` and `python-dotenv` dependencies.
+- Integrates the solver into `scraper_class.py` and updates the `runner.py` script to use the automatic solver.
+- Modifies the `/api/search` endpoint in `main.py` to handle CAPTCHA solving on the backend.
+- Removes all CAPTCHA-related UI elements and JavaScript from the `index.html` frontend, streamlining the user experience.
+- Refactors the PDF proxy endpoint to be more robust and adds enhanced logging for easier debugging.

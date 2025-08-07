@@ -5,6 +5,7 @@ import json
 import time
 import logging
 from datetime import datetime
+from captcha_solver import CaptchaSolver
 
 class ECourtsHCSCraper:
     def __init__(self, district_court_url):
@@ -14,6 +15,7 @@ class ECourtsHCSCraper:
         self.bench_map = {}
         self.case_type_map = {}
         self.captcha_url = ""
+        self.captcha_solver = CaptchaSolver()
         
         # Setup logging
         self._setup_logging()
